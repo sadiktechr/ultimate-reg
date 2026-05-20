@@ -1,32 +1,33 @@
 ```
-# Compiled and build artifacts
-*.pyc
-__pycache__/
-*.o
-*.obj
+# Dependencies
+node_modules/
+
+# Build artifacts
 dist/
 build/
-*.log
-*.tmp
-*.swp
+*.min.js
+*.min.css
+*.map
 
-# Dependencies
-.venv/
-venv/
-node_modules/
+# Logs
+*.log
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# Editors
+# Editor/IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
 
-# WordPress specific
-wp-content/cache/
-*.log
+# OS
 .DS_Store
 Thumbs.db
+
+# WordPress specific
+wp-content/plugins/woo-paid-registration/
 ```

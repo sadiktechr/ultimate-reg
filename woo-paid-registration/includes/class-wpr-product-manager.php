@@ -1,8 +1,7 @@
 <?php
 /**
- * Product Manager Class
- * 
- * Handles the creation and management of the hidden membership product
+ * Product Manager - Handles membership product selection
+ * No WooCommerce query filters to avoid compatibility warnings
  */
 
 if (!defined('ABSPATH')) {
@@ -21,144 +20,113 @@ class WPR_Product_Manager {
     }
     
     private function __construct() {
-        $this->init_hooks();
-    }
-    
-    private function init_hooks() {
-        // Remove incompatible filters that cause WC compatibility warnings
-        // Only use safe, non-intrusive hooks
-        add_action('wp', array($this, 'exclude_membership_product_from_catalog'));
-        add_filter('woocommerce_account_menu_items', array($this, 'remove_membership_from_orders'), 999);
+        // No filters that could cause WC compatibility issues
+        add_action('wpr_cleanup_pending_registrations', array($this, 'cleanup_pending_registrations'));
     }
     
     /**
-     * Get the membership product ID from settings
+     * Get selected membership product ID from settings
      */
     public function get_membership_product_id() {
-        $settings = get_option('wpr_settings', array());
-        return isset($settings['wpr_product_id']) && !empty($settings['wpr_product_id']) 
-            ? absint($settings['wpr_product_id']) 
-            : false;
+        return absint(get_option('wpr_membership_product_id', 0));
     }
     
     /**
-     * Create the hidden membership product
+     * Get membership product object
      */
-    public function create_membership_product() {
-        $existing_product_id = $this->get_membership_product_id();
+    public function get_membership_product() {
+        $product_id = $this->get_membership_product_id();
         
-        if ($existing_product_id && get_post($existing_product_id)) {
-            return $existing_product_id;
+        if (!$product_id) {
+            return null;
         }
         
-        // Create the product
-        $product = new WC_Product_Simple();
-        $product->set_name(__('Membership Registration Fee', 'woo-paid-registration'));
-        $product->set_description(__('This is a required membership fee for completing your registration. This product is not visible in the store.', 'woo-paid-registration'));
-        $product->set_regular_price(apply_filters('wpr_membership_price', '10.00'));
-        $product->set_virtual(true);
-        $product->set_downloadable(false);
-        $product->set_catalog_visibility('hidden');
-        $product->set_purchase_note(__('This is a mandatory membership fee for registration.', 'woo-paid-registration'));
-        $product->set_status('publish');
+        $product = wc_get_product($product_id);
         
-        // Add meta to mark as membership product
-        $product->update_meta_data('_wpr_membership_product', 'yes');
-        $product->update_meta_data('_visibility', 'hidden');
-        
-        $product_id = $product->save();
-        
-        // Update settings with the product ID
-        $settings = get_option('wpr_settings', array());
-        $settings['wpr_product_id'] = $product_id;
-        update_option('wpr_settings', $settings);
-        
-        do_action('wpr_membership_product_created', $product_id);
-        
-        return $product_id;
-    }
-    
-    /**
-     * Hide membership product from shop and catalog
-     */
-    public function exclude_membership_product_from_catalog() {
-        if (!is_admin() && (is_shop() || is_product_category() || is_search())) {
-            $membership_id = $this->get_membership_product_id();
-            if ($membership_id) {
-                // Remove from global query
-                global $wp_query;
-                if (isset($wp_query->posts)) {
-                    $wp_query->posts = array_filter($wp_query->posts, function($post) use ($membership_id) {
-                        return $post->ID != $membership_id;
-                    });
-                    if (isset($wp_query->post_count)) {
-                        $wp_query->post_count = count($wp_query->posts);
-                    }
-                }
-            }
+        if (!$product || !$product->is_purchasable() || !$product->is_in_stock()) {
+            return null;
         }
-    }
-    
-    /**
-     * Remove membership product from customer orders list
-     */
-    public function remove_membership_from_orders($items) {
-        // Keep the orders menu item but we'll filter the actual orders elsewhere
-        return $items;
+        
+        return $product;
     }
     
     /**
      * Check if a product is the membership product
      */
     public function is_membership_product($product_id) {
-        $membership_id = $this->get_membership_product_id();
-        return $product_id == $membership_id;
+        return $product_id == $this->get_membership_product_id();
     }
     
     /**
-     * Get membership product price
+     * Get all purchasable products for dropdown
      */
-    public function get_membership_price() {
-        $membership_id = $this->get_membership_product_id();
-        if (!$membership_id) {
-            return 0;
+    public function get_available_products() {
+        $products = array();
+        
+        $args = array(
+            'post_type'      => 'product',
+            'posts_per_page' => -1,
+            'post_status'    => 'publish',
+            'orderby'        => 'title',
+            'order'          => 'ASC',
+        );
+        
+        $query = new WP_Query($args);
+        
+        if ($query->have_posts()) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $product = wc_get_product(get_the_ID());
+                
+                if ($product && $product->is_purchasable()) {
+                    $products[get_the_ID()] = sprintf(
+                        '#%d - %s - %s',
+                        get_the_ID(),
+                        get_the_title(),
+                        $product->get_price_html()
+                    );
+                }
+            }
+            wp_reset_postdata();
         }
         
-        $product = wc_get_product($membership_id);
-        if (!$product) {
-            return 0;
-        }
-        
-        return $product->get_price();
+        return $products;
     }
     
     /**
-     * Update membership product price
+     * Cleanup pending registrations older than specified hours
      */
-    public function update_membership_price($price) {
-        $membership_id = $this->get_membership_product_id();
-        if (!$membership_id) {
-            return false;
+    public function cleanup_pending_registrations() {
+        $hours = absint(get_option('wpr_cleanup_hours', 24));
+        $cutoff_time = strtotime("-{$hours} hours");
+        
+        $users = get_users(array(
+            'meta_key'   => 'wpr_registration_status',
+            'meta_value' => 'pending_payment',
+        ));
+        
+        foreach ($users as $user) {
+            $registered_time = get_user_meta($user->ID, 'wpr_registration_timestamp', true);
+            
+            if ($registered_time && intval($registered_time) < $cutoff_time) {
+                // Delete pending user
+                wp_delete_user($user->ID);
+                
+                // Log cleanup
+                error_log(sprintf(
+                    '[WPR] Cleaned up pending registration: User ID %d (%s)',
+                    $user->ID,
+                    $user->user_email
+                ));
+            }
         }
-        
-        $product = wc_get_product($membership_id);
-        if (!$product) {
-            return false;
-        }
-        
-        $product->set_regular_price($price);
-        $product->save();
-        
-        do_action('wpr_membership_price_updated', $price, $membership_id);
-        
-        return true;
     }
     
     /**
-     * Ensure membership product exists (admin action)
+     * Check if membership product is configured
      */
-    public function ensure_product_exists() {
-        $product_id = $this->create_membership_product();
-        return $product_id ? true : false;
+    public function is_configured() {
+        $product = $this->get_membership_product();
+        return $product !== null;
     }
 }

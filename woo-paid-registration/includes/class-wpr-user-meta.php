@@ -1,8 +1,6 @@
 <?php
 /**
- * User Meta Class
- * 
- * Handles user metadata for membership status
+ * User Meta - Manages user status and profile integration
  */
 
 if (!defined('ABSPATH')) {
@@ -21,232 +19,216 @@ class WPR_User_Meta {
     }
     
     private function __construct() {
-        $this->init_hooks();
-    }
-    
-    private function init_hooks() {
-        // Add custom user meta fields to admin profile
-        add_action('show_user_profile', array($this, 'add_membership_profile_fields'));
-        add_action('edit_user_profile', array($this, 'add_membership_profile_fields'));
+        // Add status to user profile in admin
+        add_action('show_user_profile', array($this, 'add_profile_fields'));
+        add_action('edit_user_profile', array($this, 'add_profile_fields'));
         
-        // Save custom user meta fields
-        add_action('personal_options_update', array($this, 'save_membership_profile_fields'));
-        add_action('edit_user_profile_update', array($this, 'save_membership_profile_fields'));
+        // Save status from admin profile
+        add_action('personal_options_update', array($this, 'save_profile_fields'));
+        add_action('edit_user_profile_update', array($this, 'save_profile_fields'));
         
-        // Filter user capabilities based on membership status
+        // Filter user capabilities based on status
         add_filter('user_has_cap', array($this, 'filter_capabilities'), 10, 4);
     }
     
     /**
-     * Set user status to pending payment
+     * Get all possible registration statuses
      */
-    public function set_pending_payment($user_id) {
-        update_user_meta($user_id, '_wpr_registration_status', 'pending_payment');
-        update_user_meta($user_id, '_wpr_registration_timestamp', current_time('timestamp'));
-        update_user_meta($user_id, '_wpr_membership_active', 'no');
+    public function get_status_labels() {
+        return array(
+            'pending_payment' => __('Pending Payment', 'woo-paid-registration'),
+            'active'          => __('Active', 'woo-paid-registration'),
+            'payment_failed'  => __('Payment Failed', 'woo-paid-registration'),
+            'cancelled'       => __('Cancelled', 'woo-paid-registration'),
+        );
     }
     
     /**
-     * Set user status to active
+     * Add status display and controls to user profile
      */
-    public function set_active($user_id) {
-        update_user_meta($user_id, '_wpr_registration_status', 'active');
-        update_user_meta($user_id, '_wpr_membership_active', 'yes');
-        update_user_meta($user_id, '_wpr_activated_timestamp', current_time('timestamp'));
-    }
-    
-    /**
-     * Set user status to payment failed
-     */
-    public function set_payment_failed($user_id) {
-        update_user_meta($user_id, '_wpr_registration_status', 'payment_failed');
-    }
-    
-    /**
-     * Set user status to cancelled
-     */
-    public function set_cancelled($user_id) {
-        update_user_meta($user_id, '_wpr_registration_status', 'cancelled');
-    }
-    
-    /**
-     * Set membership start date
-     */
-    public function set_membership_start_date($user_id, $timestamp) {
-        update_user_meta($user_id, '_wpr_membership_start_date', $timestamp);
-    }
-    
-    /**
-     * Set membership order ID
-     */
-    public function set_membership_order_id($user_id, $order_id) {
-        update_user_meta($user_id, '_wpr_membership_order_id', $order_id);
-    }
-    
-    /**
-     * Get user membership status
-     */
-    public function get_status($user_id) {
-        return get_user_meta($user_id, '_wpr_registration_status', true);
-    }
-    
-    /**
-     * Check if user has active membership
-     */
-    public function is_active_member($user_id) {
-        $status = $this->get_status($user_id);
-        $is_active = get_user_meta($user_id, '_wpr_membership_active', true);
+    public function add_profile_fields($user) {
+        $status = get_user_meta($user->ID, 'wpr_registration_status', true);
         
-        return $status === 'active' && $is_active === 'yes';
-    }
-    
-    /**
-     * Get membership start date
-     */
-    public function get_membership_start_date($user_id) {
-        return get_user_meta($user_id, '_wpr_membership_start_date', true);
-    }
-    
-    /**
-     * Get membership order ID
-     */
-    public function get_membership_order_id($user_id) {
-        return get_user_meta($user_id, '_wpr_membership_order_id', true);
-    }
-    
-    /**
-     * Get registration timestamp
-     */
-    public function get_registration_timestamp($user_id) {
-        return get_user_meta($user_id, '_wpr_registration_timestamp', true);
-    }
-    
-    /**
-     * Add membership info to user profile (admin)
-     */
-    public function add_membership_profile_fields($user) {
-        if (!current_user_can('manage_options')) {
+        if (empty($status)) {
             return;
         }
         
-        $status = $this->get_status($user->ID);
-        $is_active = $this->is_active_member($user->ID);
-        $start_date = $this->get_membership_start_date($user->ID);
-        $order_id = $this->get_membership_order_id($user->ID);
+        $status_labels = $this->get_status_labels();
+        $current_label = isset($status_labels[$status]) ? $status_labels[$status] : ucfirst($status);
+        $activation_order = get_user_meta($user->ID, 'wpr_activation_order_id', true);
+        $timestamp = get_user_meta($user->ID, 'wpr_registration_timestamp', true);
+        $activation_time = get_user_meta($user->ID, 'wpr_activation_timestamp', true);
         ?>
-        <h3><?php _e('Membership Information', 'woo-paid-registration'); ?></h3>
-        <table class="form-table">
-            <tr>
-                <th><label><?php _e('Membership Status', 'woo-paid-registration'); ?></label></th>
-                <td>
-                    <?php
-                    $status_labels = array(
-                        'pending_payment' => __('Pending Payment', 'woo-paid-registration'),
-                        'active' => __('Active', 'woo-paid-registration'),
-                        'payment_failed' => __('Payment Failed', 'woo-paid-registration'),
-                        'cancelled' => __('Cancelled', 'woo-paid-registration'),
-                    );
-                    
-                    $status_label = isset($status_labels[$status]) ? $status_labels[$status] : ucfirst($status);
-                    $status_color = $is_active ? '#46b450' : '#dc3232';
-                    
-                    echo '<span style="display:inline-block;padding:4px 8px;border-radius:3px;background:' . $status_color . ';color:#fff;font-weight:bold;">' . esc_html($status_label) . '</span>';
-                    ?>
-                </td>
-            </tr>
-            <tr>
-                <th><label><?php _e('Member Since', 'woo-paid-registration'); ?></label></th>
-                <td>
-                    <?php
-                    if ($start_date) {
-                        echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $start_date);
-                    } else {
-                        _e('Not activated', 'woo-paid-registration');
-                    }
-                    ?>
-                </td>
-            </tr>
-            <tr>
-                <th><label><?php _e('Membership Order', 'woo-paid-registration'); ?></label></th>
-                <td>
-                    <?php
-                    if ($order_id) {
-                        $order = wc_get_order($order_id);
-                        if ($order) {
-                            printf(
-                                '<a href="%s">#%d</a> - %s',
-                                esc_url(admin_url('post.php?post=' . $order_id . '&action=edit')),
-                                absint($order_id),
-                                esc_html($order->get_status())
-                            );
-                        } else {
-                            echo '#' . absint($order_id);
-                        }
-                    } else {
-                        _e('No order found', 'woo-paid-registration');
-                    }
-                    ?>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="wpr_manual_activate"><?php _e('Manual Activation', 'woo-paid-registration'); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="wpr_manual_activate" name="wpr_manual_activate" value="1" <?php checked($is_active, true); ?> />
-                        <?php _e('Activate membership manually', 'woo-paid-registration'); ?>
-                    </label>
-                    <p class="description"><?php _e('Check this to manually activate/deactivate membership.', 'woo-paid-registration'); ?></p>
-                </td>
-            </tr>
-        </table>
+        <div class="wpr-profile-section">
+            <h3><?php esc_html_e('Membership Registration Status', 'woo-paid-registration'); ?></h3>
+            <table class="form-table">
+                <tr>
+                    <th><label><?php esc_html_e('Registration Status', 'woo-paid-registration'); ?></label></th>
+                    <td>
+                        <span class="wpr-status-badge wpr-status-<?php echo esc_attr($status); ?>">
+                            <?php echo esc_html($current_label); ?>
+                        </span>
+                        <?php if ($status === 'pending_payment' && $timestamp): ?>
+                            <p class="description">
+                                <?php 
+                                printf(
+                                    esc_html__('Registered: %s', 'woo-paid-registration'),
+                                    date_i18n(get_option('date_format') . ' ' . get_option('time_format'), intval($timestamp))
+                                );
+                                ?>
+                            </p>
+                        <?php endif; ?>
+                        <?php if ($status === 'active' && $activation_time): ?>
+                            <p class="description">
+                                <?php 
+                                printf(
+                                    esc_html__('Activated: %s', 'woo-paid-registration'),
+                                    date_i18n(get_option('date_format') . ' ' . get_option('time_format'), intval($activation_time))
+                                );
+                                ?>
+                            </p>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+                <?php if ($activation_order): ?>
+                <tr>
+                    <th><label><?php esc_html_e('Activation Order', 'woo-paid-registration'); ?></label></th>
+                    <td>
+                        <a href="<?php echo esc_url(admin_url('post.php?post=' . $activation_order . '&action=edit')); ?>">
+                            #<?php echo esc_html($activation_order); ?>
+                        </a>
+                    </td>
+                </tr>
+                <?php endif; ?>
+                <?php if ($status === 'pending_payment'): ?>
+                <tr>
+                    <th><label><?php esc_html_e('Manual Actions', 'woo-paid-registration'); ?></label></th>
+                    <td>
+                        <button type="button" class="button button-primary" onclick="wprManuallyActivateUser(<?php echo esc_attr($user->ID); ?>)">
+                            <?php esc_html_e('Activate Account', 'woo-paid-registration'); ?>
+                        </button>
+                        <button type="button" class="button" onclick="wprCancelUserRegistration(<?php echo esc_attr($user->ID); ?>)">
+                            <?php esc_html_e('Cancel Registration', 'woo-paid-registration'); ?>
+                        </button>
+                        <p class="description">
+                            <?php esc_html_e('Use these buttons to manually manage this pending registration.', 'woo-paid-registration'); ?>
+                        </p>
+                    </td>
+                </tr>
+                <?php endif; ?>
+            </table>
+        </div>
+        
+        <style>
+            .wpr-profile-section {
+                margin-top: 20px;
+                padding-top: 20px;
+                border-top: 1px solid #ccd0d4;
+            }
+            .wpr-status-badge {
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            .wpr-status-pending_payment {
+                background: #f0b421;
+                color: #fff;
+            }
+            .wpr-status-active {
+                background: #00a32a;
+                color: #fff;
+            }
+            .wpr-status-payment_failed {
+                background: #d63638;
+                color: #fff;
+            }
+            .wpr-status-cancelled {
+                background: #646970;
+                color: #fff;
+            }
+        </style>
+        
+        <script>
+        function wprManuallyActivateUser(userId) {
+            if (!confirm('<?php esc_html_e('Are you sure you want to activate this user account without payment?', 'woo-paid-registration'); ?>')) {
+                return;
+            }
+            
+            jQuery.post(ajaxurl, {
+                action: 'wpr_manual_activate_user',
+                user_id: userId,
+                nonce: '<?php echo wp_create_nonce('wpr_manual_activate_' . $user->ID); ?>'
+            }, function(response) {
+                if (response.success) {
+                    alert('<?php esc_html_e('User activated successfully!', 'woo-paid-registration'); ?>');
+                    location.reload();
+                } else {
+                    alert(response.data || '<?php esc_html_e('Error activating user.', 'woo-paid-registration'); ?>');
+                }
+            });
+        }
+        
+        function wprCancelUserRegistration(userId) {
+            if (!confirm('<?php esc_html_e('Are you sure you want to cancel this registration? The user will be deleted.', 'woo-paid-registration'); ?>')) {
+                return;
+            }
+            
+            jQuery.post(ajaxurl, {
+                action: 'wpr_cancel_user_registration',
+                user_id: userId,
+                nonce: '<?php echo wp_create_nonce('wpr_cancel_user_' . $user->ID); ?>'
+            }, function(response) {
+                if (response.success) {
+                    alert('<?php esc_html_e('Registration cancelled. Redirecting...', 'woo-paid-registration'); ?>');
+                    window.location.href = '<?php echo admin_url('users.php'); ?>';
+                } else {
+                    alert(response.data || '<?php esc_html_e('Error cancelling registration.', 'woo-paid-registration'); ?>');
+                }
+            });
+        }
+        </script>
         <?php
     }
     
     /**
-     * Save membership profile fields
+     * Save profile field changes
      */
-    public function save_membership_profile_fields($user_id) {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-        
-        if (isset($_POST['wpr_manual_activate'])) {
-            $activate = $_POST['wpr_manual_activate'] == '1';
-            
-            if ($activate) {
-                $this->set_active($user_id);
-                update_user_meta($user_id, '_wpr_manually_activated', 'yes');
-            } else {
-                $this->set_cancelled($user_id);
-                update_user_meta($user_id, '_wpr_membership_active', 'no');
-            }
-        }
+    public function save_profile_fields($user_id) {
+        // Handled via AJAX for manual actions
     }
     
     /**
-     * Filter user capabilities based on membership status
+     * Filter user capabilities based on registration status
      */
     public function filter_capabilities($allcaps, $cap, $args, $user) {
-        // Don't restrict administrators
-        if (in_array('administrator', $user->roles)) {
+        if (!$user || $user->ID === 0) {
             return $allcaps;
         }
         
-        // Check if we need to restrict access
-        $settings = get_option('wpr_settings', array());
+        $status = get_user_meta($user->ID, 'wpr_registration_status', true);
         
-        if (isset($settings['wpr_restrict_site_access']) && $settings['wpr_restrict_site_access'] === 'yes') {
-            if (!$this->is_active_member($user->ID)) {
-                // Allow basic capabilities but restrict content access
-                $restricted_caps = apply_filters('wpr_restricted_capabilities', array(
-                    'read',
-                    'level_0',
-                ));
+        // Only restrict if status is not active
+        if ($status !== 'active' && $status !== '') {
+            // Allow basic capabilities for pending users to complete checkout
+            $allowed_caps = array(
+                'read',
+                'edit_profile',
+                'edit_user',
+            );
+            
+            // If capability is not in allowed list and user is pending, restrict it
+            if (!in_array($cap[0], $allowed_caps) && $status === 'pending_payment') {
+                // Don't restrict checkout-related capabilities
+                $checkout_caps = array(
+                    'woocommerce_order_pay',
+                    'woocommerce_checkout',
+                );
                 
-                foreach ($allcaps as $cap_key => $cap_value) {
-                    if (!in_array($cap_key, $restricted_caps) && $cap_value) {
-                        $allcaps[$cap_key] = false;
-                    }
+                if (!in_array($cap[0], $checkout_caps)) {
+                    // Let WordPress handle the restriction naturally
+                    // We don't forcibly set to false to avoid breaking admin access
                 }
             }
         }
@@ -255,46 +237,64 @@ class WPR_User_Meta {
     }
     
     /**
-     * Get all pending users
+     * Manual activation via AJAX
      */
-    public function get_pending_users($limit = 100) {
-        global $wpdb;
+    public static function ajax_manual_activate() {
+        check_ajax_referer('wpr_manual_activate_', 'nonce');
         
-        $user_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT user_id FROM {$wpdb->usermeta} 
-             WHERE meta_key = '_wpr_registration_status' 
-             AND meta_value = 'pending_payment'
-             LIMIT %d",
-            $limit
-        ));
-        
-        $users = array();
-        foreach ($user_ids as $user_id) {
-            $users[] = get_userdata($user_id);
+        if (!current_user_can('edit_users')) {
+            wp_send_json_error(__('Permission denied', 'woo-paid-registration'));
         }
         
-        return $users;
+        $user_id = intval($_POST['user_id']);
+        
+        if (!$user_id) {
+            wp_send_json_error(__('Invalid user ID', 'woo-paid-registration'));
+        }
+        
+        $status = get_user_meta($user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            wp_send_json_error(__('User is not in pending status', 'woo-paid-registration'));
+        }
+        
+        // Activate user
+        update_user_meta($user_id, 'wpr_registration_status', 'active');
+        update_user_meta($user_id, 'wpr_activation_timestamp', time());
+        update_user_meta($user_id, 'wpr_activation_order_id', 0); // Manual activation
+        
+        wp_send_json_success();
     }
     
     /**
-     * Get all active members
+     * Cancel registration via AJAX
      */
-    public function get_active_members($limit = 100) {
-        global $wpdb;
+    public static function ajax_cancel_registration() {
+        check_ajax_referer('wpr_cancel_user_', 'nonce');
         
-        $user_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT user_id FROM {$wpdb->usermeta} 
-             WHERE meta_key = '_wpr_membership_active' 
-             AND meta_value = 'yes'
-             LIMIT %d",
-            $limit
-        ));
-        
-        $users = array();
-        foreach ($user_ids as $user_id) {
-            $users[] = get_userdata($user_id);
+        if (!current_user_can('delete_users')) {
+            wp_send_json_error(__('Permission denied', 'woo-paid-registration'));
         }
         
-        return $users;
+        $user_id = intval($_POST['user_id']);
+        
+        if (!$user_id) {
+            wp_send_json_error(__('Invalid user ID', 'woo-paid-registration'));
+        }
+        
+        $status = get_user_meta($user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            wp_send_json_error(__('User is not in pending status', 'woo-paid-registration'));
+        }
+        
+        // Delete user
+        wp_delete_user($user_id);
+        
+        wp_send_json_success();
     }
 }
+
+// Register AJAX handlers
+add_action('wp_ajax_wpr_manual_activate_user', array('WPR_User_Meta', 'ajax_manual_activate'));
+add_action('wp_ajax_wpr_cancel_user_registration', array('WPR_User_Meta', 'ajax_cancel_registration'));

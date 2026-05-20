@@ -1,8 +1,6 @@
 <?php
 /**
- * Registration Handler Class
- * 
- * Intercepts the registration process and redirects to checkout
+ * Registration Handler - Intercepts registration and forces payment
  */
 
 if (!defined('ABSPATH')) {
@@ -21,263 +19,196 @@ class WPR_Registration_Handler {
     }
     
     private function __construct() {
-        $this->init_hooks();
-    }
-    
-    private function init_hooks() {
         // Intercept registration
-        add_action('woocommerce_register_post', array($this, 'validate_registration'), 10, 3);
-        add_action('woocommerce_created_customer', array($this, 'handle_customer_creation'), 10, 2);
+        add_action('user_register', array($this, 'handle_new_registration'), 1, 1);
         
-        // Modify registration form behavior
-        add_filter('woocommerce_registration_redirect', array($this, 'redirect_to_checkout'), 10, 1);
+        // Block login for pending users
+        add_filter('wp_authenticate_user', array($this, 'block_pending_login'), 10, 2);
         
-        // Add hidden field to track pending registration
-        add_action('woocommerce_register_form_end', array($this, 'add_hidden_fields'));
+        // Redirect after registration to checkout
+        add_filter('woocommerce_registration_redirect', array($this, 'redirect_to_checkout'), 999);
         
-        // Handle pending registration cleanup
-        add_action('wpr_cleanup_pending_registrations', array($this, 'cleanup_pending_registrations'));
+        // Add membership product to cart automatically after registration
+        add_action('template_redirect', array($this, 'add_membership_to_cart'), 99);
+        
+        // Prevent checkout without membership product for new pending users
+        add_action('woocommerce_before_checkout_form', array($this, 'validate_checkout_for_pending_users'));
     }
     
     /**
-     * Validate registration before processing
+     * Handle new user registration
      */
-    public function validate_registration($username, $email, $validation_errors) {
-        if (!$this->is_paid_registration_enabled()) {
-            return $validation_errors;
-        }
-        
-        // Check if membership product exists
+    public function handle_new_registration($user_id) {
+        // Only process if membership product is configured
         $product_manager = WPR_Product_Manager::get_instance();
-        $membership_id = $product_manager->get_membership_product_id();
-        
-        if (!$membership_id) {
-            $validation_errors->add('wpr_error', __('Membership system is not properly configured. Please contact the site administrator.', 'woo-paid-registration'));
-        }
-        
-        return $validation_errors;
-    }
-    
-    /**
-     * Handle customer creation - create user with pending status
-     */
-    public function handle_customer_creation($customer_id, $new_customer_data) {
-        if (!$this->is_paid_registration_enabled()) {
+        if (!$product_manager->is_configured()) {
             return;
         }
         
-        // Mark user as pending payment
-        $user_meta = WPR_User_Meta::get_instance();
-        $user_meta->set_pending_payment($customer_id);
+        // Set user as pending payment
+        update_user_meta($user_id, 'wpr_registration_status', 'pending_payment');
+        update_user_meta($user_id, 'wpr_registration_timestamp', time());
         
-        // Store registration data in session for checkout
-        WC()->session->set('wpr_pending_user_id', $customer_id);
-        WC()->session->set('wpr_registration_complete', false);
-        
-        // Create pending order for membership
-        $this->create_membership_order($customer_id);
+        // Store user ID in session for cart redirect
+        if (WC()->session) {
+            WC()->session->set('wpr_pending_user_id', $user_id);
+        }
     }
     
     /**
-     * Create a pending order for the membership product
+     * Block login for users with pending payment status
      */
-    private function create_membership_order($customer_id) {
-        $product_manager = WPR_Product_Manager::get_instance();
-        $membership_id = $product_manager->get_membership_product_id();
-        
-        if (!$membership_id) {
-            return false;
+    public function block_pending_login($user, $password) {
+        if (is_wp_error($user)) {
+            return $user;
         }
         
-        // Create order
-        $order = wc_create_order();
-        $order->add_product(wc_get_product($membership_id), 1);
-        $order->set_customer_id($customer_id);
+        $status = get_user_meta($user->ID, 'wpr_registration_status', true);
         
-        // Set billing details from customer
-        $customer = new WC_Customer($customer_id);
-        $order->set_billing_email($customer->get_email());
-        $order->set_billing_first_name($customer->get_first_name());
-        $order->set_billing_last_name($customer->get_last_name());
+        if ($status === 'pending_payment') {
+            $timestamp = get_user_meta($user->ID, 'wpr_registration_timestamp', true);
+            $hours = absint(get_option('wpr_cleanup_hours', 24));
+            $cutoff = strtotime("-{$hours} hours");
+            
+            // If expired, delete user
+            if ($timestamp && intval($timestamp) < $cutoff) {
+                wp_delete_user($user->ID);
+                return new WP_Error(
+                    'registration_expired',
+                    __('Your registration has expired. Please register again.', 'woo-paid-registration')
+                );
+            }
+            
+            // Block login with message
+            return new WP_Error(
+                'payment_pending',
+                __('Please complete your payment to activate your account. Check your email for checkout instructions.', 'woo-paid-registration')
+            );
+        }
         
-        // Add meta to mark as membership registration order
-        $order->update_meta_data('_wpr_membership_order', 'yes');
-        $order->update_meta_data('_wpr_pending_user_id', $customer_id);
+        if ($status === 'payment_failed') {
+            return new WP_Error(
+                'payment_failed',
+                __('Your payment failed. Please contact support or try registering again.', 'woo-paid-registration')
+            );
+        }
         
-        // Calculate totals
-        $order->calculate_totals();
+        if ($status === 'cancelled') {
+            return new WP_Error(
+                'registration_cancelled',
+                __('This registration was cancelled. Please register again.', 'woo-paid-registration')
+            );
+        }
         
-        // Set status to pending
-        $order->set_status('pending', __('Order created for membership registration', 'woo-paid-registration'));
-        
-        $order_id = $order->save();
-        
-        // Store order ID in user meta
-        $user_meta = WPR_User_Meta::get_instance();
-        $user_meta->set_membership_order_id($customer_id, $order_id);
-        
-        // Store order ID in session
-        WC()->session->set('wpr_membership_order_id', $order_id);
-        
-        do_action('wpr_membership_order_created', $order_id, $customer_id);
-        
-        return $order_id;
+        return $user;
     }
     
     /**
-     * Redirect to checkout after registration
+     * Redirect newly registered users to checkout
      */
     public function redirect_to_checkout($redirect) {
-        if (!$this->is_paid_registration_enabled()) {
-            return $redirect;
+        if (WC()->session && WC()->session->get('wpr_pending_user_id')) {
+            return wc_get_checkout_url();
         }
-        
-        $pending_user_id = WC()->session->get('wpr_pending_user_id');
-        
-        if ($pending_user_id) {
-            // Redirect to checkout page
-            $checkout_url = wc_get_checkout_url();
-            
-            // Add query arg to indicate this is a membership registration checkout
-            $checkout_url = add_query_arg('wpr_membership_checkout', '1', $checkout_url);
-            
-            return $checkout_url;
-        }
-        
         return $redirect;
     }
     
     /**
-     * Add hidden fields to registration form
+     * Automatically add membership product to cart for pending users
      */
-    public function add_hidden_fields() {
-        if (!$this->is_paid_registration_enabled()) {
+    public function add_membership_to_cart() {
+        if (!is_checkout() && !is_cart()) {
             return;
         }
         
-        echo '<input type="hidden" name="wpr_membership_registration" value="1" />';
-    }
-    
-    /**
-     * Check if paid registration is enabled
-     */
-    private function is_paid_registration_enabled() {
-        $settings = get_option('wpr_settings', array());
-        
-        // Check if plugin is enabled
-        if (isset($settings['wpr_enabled']) && $settings['wpr_enabled'] !== 'yes') {
-            return false;
+        $session = WC()->session;
+        if (!$session) {
+            return;
         }
         
-        // Check if payment is required
-        if (isset($settings['wpr_require_payment']) && $settings['wpr_require_payment'] !== 'yes') {
-            return false;
+        $pending_user_id = $session->get('wpr_pending_user_id');
+        
+        if (!$pending_user_id || !is_user_logged_in()) {
+            return;
         }
         
-        // Check if free registration is allowed for this user role
-        if ($this->is_free_registration_allowed()) {
-            return false;
+        // Verify this user is actually pending
+        $status = get_user_meta($pending_user_id, 'wpr_registration_status', true);
+        if ($status !== 'pending_payment') {
+            $session->__unset('wpr_pending_user_id');
+            return;
         }
         
-        return true;
-    }
-    
-    /**
-     * Check if free registration is allowed
-     */
-    private function is_free_registration_allowed() {
-        $settings = get_option('wpr_settings', array());
+        // Get membership product
+        $product_manager = WPR_Product_Manager::get_instance();
+        $product = $product_manager->get_membership_product();
         
-        if (isset($settings['wpr_enable_free_registration']) && $settings['wpr_enable_free_registration'] === 'yes') {
-            // Check if current registration is for a free role
-            if (isset($_POST['role'])) {
-                $role = sanitize_text_field($_POST['role']);
-                $free_roles = isset($settings['wpr_free_roles']) ? $settings['wpr_free_roles'] : array();
-                
-                if (in_array($role, $free_roles)) {
-                    return true;
-                }
+        if (!$product) {
+            return;
+        }
+        
+        // Check if product already in cart
+        $found = false;
+        foreach (WC()->cart->get_cart() as $cart_item) {
+            if ($cart_item['product_id'] == $product->get_id()) {
+                $found = true;
+                break;
             }
         }
         
-        return false;
-    }
-    
-    /**
-     * Cleanup pending registrations older than 24 hours
-     */
-    public function cleanup_pending_registrations() {
-        global $wpdb;
-        
-        $expiry_hours = apply_filters('wpr_pending_registration_expiry', 24);
-        $expiry_time = strtotime("-{$expiry_hours} hours");
-        
-        // Get users with pending payment status older than expiry time
-        $user_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT user_id FROM {$wpdb->usermeta} 
-             WHERE meta_key = '_wpr_registration_status' 
-             AND meta_value = 'pending_payment'
-             AND user_id IN (
-                 SELECT user_id FROM {$wpdb->usermeta} 
-                 WHERE meta_key = '_wpr_registration_timestamp' 
-                 AND meta_value < %d
-             )",
-            $expiry_time
-        ));
-        
-        foreach ($user_ids as $user_id) {
-            // Delete the user
-            wp_delete_user($user_id);
-            
-            do_action('wpr_pending_registration_cleaned', $user_id);
+        // Add if not found
+        if (!$found) {
+            WC()->cart->add_to_cart($product->get_id(), 1);
         }
     }
     
     /**
-     * Complete registration after successful payment
+     * Validate that pending users are purchasing the membership product
      */
-    public function complete_registration($user_id, $order_id) {
-        $user_meta = WPR_User_Meta::get_instance();
-        
-        // Update user status to active
-        $user_meta->set_active($user_id);
-        
-        // Store membership activation date
-        $user_meta->set_membership_start_date($user_id, current_time('timestamp'));
-        
-        // Store associated order
-        $user_meta->set_membership_order_id($user_id, $order_id);
-        
-        // Clear session data
-        WC()->session->__unset('wpr_pending_user_id');
-        WC()->session->__unset('wpr_membership_order_id');
-        WC()->session->set('wpr_registration_complete', true);
-        
-        // Send welcome email
-        $this->send_welcome_email($user_id, $order_id);
-        
-        do_action('wpr_registration_completed', $user_id, $order_id);
-    }
-    
-    /**
-     * Send welcome email to new member
-     */
-    private function send_welcome_email($user_id, $order_id) {
-        $user = get_userdata($user_id);
-        
-        if (!$user) {
+    public function validate_checkout_for_pending_users() {
+        $session = WC()->session;
+        if (!$session) {
             return;
         }
         
-        // Use WooCommerce's built-in customer new account email
-        $mailer = WC()->mailer();
-        $email = $mailer->emails['WC_Email_Customer_New_Account'];
+        $pending_user_id = $session->get('wpr_pending_user_id');
         
-        if ($email) {
-            $email->trigger($user_id, '', true);
+        if (!$pending_user_id) {
+            return;
         }
         
-        // Optionally send a custom membership welcome email
-        do_action('wpr_membership_welcome_email', $user_id, $order_id);
+        $status = get_user_meta($pending_user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            return;
+        }
+        
+        // Check cart contains membership product
+        $product_manager = WPR_Product_Manager::get_instance();
+        $membership_product_id = $product_manager->get_membership_product_id();
+        
+        $has_membership = false;
+        foreach (WC()->cart->get_cart() as $cart_item) {
+            if ($cart_item['product_id'] == $membership_product_id) {
+                $has_membership = true;
+                break;
+            }
+        }
+        
+        if (!$has_membership) {
+            wc_add_notice(
+                __('You must purchase the membership product to complete your registration.', 'woo-paid-registration'),
+                'error'
+            );
+        }
+    }
+    
+    /**
+     * Clear pending user session after successful registration flow
+     */
+    public function clear_pending_session($order_id) {
+        if (WC()->session) {
+            WC()->session->__unset('wpr_pending_user_id');
+        }
     }
 }

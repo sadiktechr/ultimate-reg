@@ -1,8 +1,6 @@
 <?php
 /**
- * Payment Handler Class
- * 
- * Handles payment completion and order status changes
+ * Payment Handler - Processes payment completion and activates accounts
  */
 
 if (!defined('ABSPATH')) {
@@ -21,301 +19,297 @@ class WPR_Payment_Handler {
     }
     
     private function __construct() {
-        $this->init_hooks();
-    }
-    
-    private function init_hooks() {
-        // Listen for order status changes
+        // Listen for successful payments
+        add_action('woocommerce_payment_complete', array($this, 'handle_successful_payment'), 10, 1);
         add_action('woocommerce_order_status_completed', array($this, 'handle_order_completed'), 10, 1);
         add_action('woocommerce_order_status_processing', array($this, 'handle_order_completed'), 10, 1);
         
-        // Handle failed/cancelled orders
-        add_action('woocommerce_order_status_failed', array($this, 'handle_order_failed'), 10, 1);
-        add_action('woocommerce_order_status_cancelled', array($this, 'handle_order_cancelled'), 10, 1);
+        // Handle failed/cancelled payments
+        add_action('woocommerce_order_status_failed', array($this, 'handle_failed_payment'), 10, 1);
+        add_action('woocommerce_order_status_cancelled', array($this, 'handle_cancelled_payment'), 10, 1);
+        add_action('woocommerce_order_status_on-hold', array($this, 'handle_on_hold_payment'), 10, 1);
         
-        // Modify checkout for membership registration
-        add_filter('woocommerce_checkout_fields', array($this, 'modify_checkout_fields'), 999);
-        add_action('woocommerce_before_checkout_form', array($this, 'display_membership_message'));
-        
-        // Prevent removal of membership product from cart during registration
+        // Prevent removal of membership product from cart for pending users
         add_filter('woocommerce_update_cart_action_cart_updated', array($this, 'prevent_membership_removal'), 10, 1);
-        add_filter('woocommerce_remove_cart_item', array($this, 'prevent_membership_product_removal'), 10, 2);
         
-        // Redirect after successful payment
-        add_filter('woocommerce_get_return_url', array($this, 'custom_return_url'), 999, 2);
+        // Add notice on checkout for pending users
+        add_action('woocommerce_before_checkout_form', array($this, 'add_pending_user_notice'));
     }
     
     /**
-     * Handle completed order (payment successful)
+     * Handle successful payment
      */
-    public function handle_order_completed($order_id) {
+    public function handle_successful_payment($order_id) {
         $order = wc_get_order($order_id);
         
         if (!$order) {
             return;
         }
         
-        // Check if this is a membership order
-        $is_membership_order = $order->get_meta('_wpr_membership_order');
-        
-        if (!$is_membership_order || $is_membership_order !== 'yes') {
-            return;
-        }
-        
-        // Get the user ID
-        $user_id = $order->get_customer_id();
-        
-        if (!$user_id) {
-            $pending_user_id = $order->get_meta('_wpr_pending_user_id');
-            if ($pending_user_id) {
-                $user_id = absint($pending_user_id);
-            }
-        }
+        $user_id = $order->get_user_id();
         
         if (!$user_id) {
             return;
         }
         
-        // Complete the registration
-        $registration_handler = WPR_Registration_Handler::get_instance();
-        $registration_handler->complete_registration($user_id, $order_id);
+        $status = get_user_meta($user_id, 'wpr_registration_status', true);
         
-        do_action('wpr_membership_payment_completed', $user_id, $order_id, $order);
-    }
-    
-    /**
-     * Handle failed order
-     */
-    public function handle_order_failed($order_id) {
-        $order = wc_get_order($order_id);
-        
-        if (!$order) {
+        // Only process if user is pending
+        if ($status !== 'pending_payment') {
             return;
         }
         
-        // Check if this is a membership order
-        $is_membership_order = $order->get_meta('_wpr_membership_order');
+        // Check if order contains membership product
+        $product_manager = WPR_Product_Manager::get_instance();
+        $membership_product_id = $product_manager->get_membership_product_id();
         
-        if (!$is_membership_order || $is_membership_order !== 'yes') {
-            return;
-        }
-        
-        $user_id = $order->get_customer_id();
-        
-        if (!$user_id) {
-            $pending_user_id = $order->get_meta('_wpr_pending_user_id');
-            if ($pending_user_id) {
-                $user_id = absint($pending_user_id);
-            }
-        }
-        
-        if (!$user_id) {
-            return;
-        }
-        
-        // Mark user registration as failed
-        $user_meta = WPR_User_Meta::get_instance();
-        $user_meta->set_payment_failed($user_id);
-        
-        // Store failure reason
-        update_user_meta($user_id, '_wpr_payment_failure_reason', __('Payment failed or was declined', 'woo-paid-registration'));
-        
-        do_action('wpr_membership_payment_failed', $user_id, $order_id, $order);
-    }
-    
-    /**
-     * Handle cancelled order
-     */
-    public function handle_order_cancelled($order_id) {
-        $order = wc_get_order($order_id);
-        
-        if (!$order) {
-            return;
-        }
-        
-        // Check if this is a membership order
-        $is_membership_order = $order->get_meta('_wpr_membership_order');
-        
-        if (!$is_membership_order || $is_membership_order !== 'yes') {
-            return;
-        }
-        
-        $user_id = $order->get_customer_id();
-        
-        if (!$user_id) {
-            $pending_user_id = $order->get_meta('_wpr_pending_user_id');
-            if ($pending_user_id) {
-                $user_id = absint($pending_user_id);
-            }
-        }
-        
-        if (!$user_id) {
-            return;
-        }
-        
-        // Mark user registration as cancelled
-        $user_meta = WPR_User_Meta::get_instance();
-        $user_meta->set_cancelled($user_id);
-        
-        do_action('wpr_membership_payment_cancelled', $user_id, $order_id, $order);
-    }
-    
-    /**
-     * Modify checkout fields for membership registration
-     */
-    public function modify_checkout_fields($fields) {
-        $is_membership_checkout = isset($_GET['wpr_membership_checkout']) && $_GET['wpr_membership_checkout'] == '1';
-        
-        if (!$is_membership_checkout) {
-            return $fields;
-        }
-        
-        // Add a notice at the top of checkout
-        add_filter('woocommerce_checkout_before_customer_details', array($this, 'add_membership_checkout_notice'));
-        
-        // Optionally simplify checkout fields for membership-only purchase
-        $cart = WC()->cart;
-        $has_only_membership = true;
-        
-        foreach ($cart->get_cart() as $cart_item) {
-            $product_id = $cart_item['product_id'];
-            if (!WPR_Product_Manager::get_instance()->is_membership_product($product_id)) {
-                $has_only_membership = false;
+        $has_membership = false;
+        foreach ($order->get_items() as $item) {
+            if ($item->get_product_id() == $membership_product_id) {
+                $has_membership = true;
                 break;
             }
         }
         
-        if ($has_only_membership) {
-            // Simplify checkout - only keep essential fields
-            // This can be customized based on requirements
-        }
-        
-        return $fields;
-    }
-    
-    /**
-     * Add notice at membership checkout
-     */
-    public function add_membership_checkout_notice() {
-        echo '<div class="woocommerce-info wpr-membership-notice">';
-        echo __('You are completing your registration by paying the membership fee.', 'woo-paid-registration');
-        echo '</div>';
-    }
-    
-    /**
-     * Display membership message before checkout form
-     */
-    public function display_membership_message() {
-        $is_membership_checkout = isset($_GET['wpr_membership_checkout']) && $_GET['wpr_membership_checkout'] == '1';
-        
-        if (!$is_membership_checkout) {
+        if (!$has_membership) {
             return;
         }
         
-        echo '<div class="wpr-checkout-message" style="background: #f0f0f1; padding: 15px; margin-bottom: 20px; border-left: 4px solid #2271b1;">';
-        echo '<strong>' . __('Membership Registration', 'woo-paid-registration') . '</strong><br>';
-        echo __('Complete your payment to activate your account. Once payment is confirmed, you will have full access to the site.', 'woo-paid-registration');
-        echo '</div>';
+        // Activate the user account
+        $this->activate_user_account($user_id, $order_id);
     }
     
     /**
-     * Prevent removal of membership product from cart during registration
+     * Handle order completed/processing status
      */
-    public function prevent_membership_product_removal($remove, $cart_item_key) {
-        $is_membership_checkout = isset($_GET['wpr_membership_checkout']) && $_GET['wpr_membership_checkout'] == '1';
+    public function handle_order_completed($order_id) {
+        $this->handle_successful_payment($order_id);
+    }
+    
+    /**
+     * Activate user account after successful payment
+     */
+    private function activate_user_account($user_id, $order_id) {
+        // Update user status
+        update_user_meta($user_id, 'wpr_registration_status', 'active');
+        update_user_meta($user_id, 'wpr_activation_timestamp', time());
+        update_user_meta($user_id, 'wpr_activation_order_id', $order_id);
         
-        if (!$is_membership_checkout) {
-            return $remove;
+        // Clear pending session
+        if (WC()->session) {
+            WC()->session->__unset('wpr_pending_user_id');
         }
         
-        $cart = WC()->cart;
-        $cart_item = $cart->get_cart_item($cart_item_key);
+        // Send welcome email
+        $this->send_welcome_email($user_id, $order_id);
         
-        if (!$cart_item) {
-            return $remove;
+        // Trigger action for third-party integrations
+        do_action('wpr_registration_completed', $user_id, $order_id);
+        
+        // Log activation
+        error_log(sprintf(
+            '[WPR] User account activated: User ID %d (%s), Order ID %d',
+            $user_id,
+            wp_get_current_user()->user_email,
+            $order_id
+        ));
+    }
+    
+    /**
+     * Send welcome email to newly activated user
+     */
+    private function send_welcome_email($user_id, $order_id) {
+        $user = get_user_by('id', $user_id);
+        
+        if (!$user) {
+            return;
         }
         
-        $product_id = $cart_item['product_id'];
+        $subject = sprintf(__('Welcome! Your account has been activated - %s', 'woo-paid-registration'), get_bloginfo('name'));
+        
+        $message = sprintf(
+            __("Hi %s,\n\nGreat news! Your payment has been received and your account is now active.\n\nYou can now log in and start using all the features available to members.\n\nLogin URL: %s\n\nThank you for joining us!", 'woo-paid-registration'),
+            $user->display_name,
+            wp_login_url()
+        );
+        
+        $headers = array('Content-Type: text/plain; charset=UTF-8');
+        
+        wp_mail($user->user_email, $subject, $message, $headers);
+    }
+    
+    /**
+     * Handle failed payment
+     */
+    public function handle_failed_payment($order_id) {
+        $order = wc_get_order($order_id);
+        
+        if (!$order) {
+            return;
+        }
+        
+        $user_id = $order->get_user_id();
+        
+        if (!$user_id) {
+            return;
+        }
+        
+        $status = get_user_meta($user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            return;
+        }
+        
+        // Check if order contains membership product
         $product_manager = WPR_Product_Manager::get_instance();
+        $membership_product_id = $product_manager->get_membership_product_id();
         
-        if ($product_manager->is_membership_product($product_id)) {
-            // Prevent removal during membership registration checkout
-            wc_add_notice(__('The membership fee cannot be removed during registration.', 'woo-paid-registration'), 'error');
-            return false;
-        }
-        
-        return $remove;
-    }
-    
-    /**
-     * Handle cart updated action
-     */
-    public function prevent_membership_removal($cart_updated) {
-        $is_membership_checkout = isset($_GET['wpr_membership_checkout']) && $_GET['wpr_membership_checkout'] == '1';
-        
-        if (!$is_membership_checkout) {
-            return $cart_updated;
-        }
-        
-        // Check if someone tried to remove the membership product
-        if (isset($_POST['remove_item'])) {
-            $cart_item_key = sanitize_text_field($_POST['remove_item']);
-            $cart = WC()->cart;
-            $cart_item = $cart->get_cart_item($cart_item_key);
-            
-            if ($cart_item) {
-                $product_id = $cart_item['product_id'];
-                $product_manager = WPR_Product_Manager::get_instance();
-                
-                if ($product_manager->is_membership_product($product_id)) {
-                    wc_add_notice(__('The membership fee is required for registration.', 'woo-paid-registration'), 'error');
-                    return false;
-                }
+        $has_membership = false;
+        foreach ($order->get_items() as $item) {
+            if ($item->get_product_id() == $membership_product_id) {
+                $has_membership = true;
+                break;
             }
         }
         
-        return $cart_updated;
+        if (!$has_membership) {
+            return;
+        }
+        
+        // Update user status
+        update_user_meta($user_id, 'wpr_registration_status', 'payment_failed');
+        update_user_meta($user_id, 'wpr_failed_order_id', $order_id);
+        
+        // Notify user
+        $this->send_payment_failed_email($user_id, $order_id);
+        
+        do_action('wpr_payment_failed', $user_id, $order_id);
     }
     
     /**
-     * Custom return URL after membership payment
+     * Handle cancelled payment
      */
-    public function custom_return_url($return_url, $order) {
-        $is_membership_order = $order->get_meta('_wpr_membership_order');
+    public function handle_cancelled_payment($order_id) {
+        $order = wc_get_order($order_id);
         
-        if (!$is_membership_order || $is_membership_order !== 'yes') {
-            return $return_url;
+        if (!$order) {
+            return;
         }
         
-        // Check settings for custom redirect
-        $settings = get_option('wpr_settings', array());
-        $custom_redirect = isset($settings['wpr_redirect_after_payment']) ? $settings['wpr_redirect_after_payment'] : '';
+        $user_id = $order->get_user_id();
         
-        if (!empty($custom_redirect)) {
-            $return_url = $custom_redirect;
-        } else {
-            // Default to my account page with welcome message
-            $return_url = wc_get_account_endpoint_url('dashboard');
+        if (!$user_id) {
+            return;
         }
         
-        return $return_url;
+        $status = get_user_meta($user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            return;
+        }
+        
+        // Update user status
+        update_user_meta($user_id, 'wpr_registration_status', 'cancelled');
+        
+        do_action('wpr_registration_cancelled', $user_id, $order_id);
     }
     
     /**
-     * Check if current checkout is for membership registration
+     * Handle on-hold payment
      */
-    public function is_membership_checkout() {
-        if (!WC()->cart) {
-            return false;
+    public function handle_on_hold_payment($order_id) {
+        // Keep user as pending until payment clears
+        // No action needed, user remains in pending_payment status
+    }
+    
+    /**
+     * Send payment failed notification
+     */
+    private function send_payment_failed_email($user_id, $order_id) {
+        $user = get_user_by('id', $user_id);
+        
+        if (!$user) {
+            return;
         }
         
+        $subject = sprintf(__('Payment Failed - Action Required - %s', 'woo-paid-registration'), get_bloginfo('name'));
+        
+        $message = sprintf(
+            __("Hi %s,\n\nYour payment for membership has failed.\n\nTo complete your registration, please try again or contact support if you need assistance.\n\nYour account is currently inactive. You can try registering again or contact us to resolve this issue.\n\nThank you!", 'woo-paid-registration'),
+            $user->display_name
+        );
+        
+        $headers = array('Content-Type: text/plain; charset=UTF-8');
+        
+        wp_mail($user->user_email, $subject, $message, $headers);
+    }
+    
+    /**
+     * Prevent removal of membership product from cart for pending users
+     */
+    public function prevent_membership_removal($updated) {
+        if (!WC()->session) {
+            return $updated;
+        }
+        
+        $pending_user_id = WC()->session->get('wpr_pending_user_id');
+        
+        if (!$pending_user_id) {
+            return $updated;
+        }
+        
+        $status = get_user_meta($pending_user_id, 'wpr_registration_status', true);
+        
+        if ($status !== 'pending_payment') {
+            return $updated;
+        }
+        
+        $product_manager = WPR_Product_Manager::get_instance();
+        $membership_product_id = $product_manager->get_membership_product_id();
+        
+        // Check if membership product was removed
+        $has_membership = false;
         foreach (WC()->cart->get_cart() as $cart_item) {
-            $product_id = $cart_item['product_id'];
-            if (WPR_Product_Manager::get_instance()->is_membership_product($product_id)) {
-                return true;
+            if ($cart_item['product_id'] == $membership_product_id) {
+                $has_membership = true;
+                break;
             }
         }
         
-        return false;
+        if (!$has_membership && !empty($_POST['cart']) && is_array($_POST['cart'])) {
+            // Re-add membership product
+            WC()->cart->add_to_cart($membership_product_id, 1);
+            
+            wc_add_notice(
+                __('The membership product is required to complete your registration and cannot be removed.', 'woo-paid-registration'),
+                'notice'
+            );
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Add notice for pending users on checkout
+     */
+    public function add_pending_user_notice() {
+        if (!WC()->session) {
+            return;
+        }
+        
+        $pending_user_id = WC()->session->get('wpr_pending_user_id');
+        
+        if (!$pending_user_id) {
+            return;
+        }
+        
+        $status = get_user_meta($pending_user_id, 'wpr_registration_status', true);
+        
+        if ($status === 'pending_payment') {
+            wc_print_notice(
+                __('Please complete your payment to activate your account. Your registration is pending until payment is received.', 'woo-paid-registration'),
+                'notice'
+            );
+        }
     }
 }

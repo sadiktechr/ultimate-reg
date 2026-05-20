@@ -1,5 +1,5 @@
 /**
- * Admin JavaScript for WooCommerce Paid Registration
+ * WooCommerce Paid Registration - Admin JavaScript
  */
 
 (function($) {
@@ -7,153 +7,185 @@
 
     $(document).ready(function() {
         
-        // Product selection change handler - show/hide product info box
-        $('.wpr-product-select').on('change', function() {
-            var selectedProductId = $(this).val();
+        // Handle manual cleanup button
+        $('#wprManualCleanup').on('click', function() {
+            var $button = $(this);
+            var $result = $('#wprCleanupResult');
             
-            if (selectedProductId) {
-                // User selected a product, form will save on submit
-                console.log('Product selected: ' + selectedProductId);
-            } else {
-                // No product selected
-                console.log('No product selected');
-            }
-        });
-        
-        // Cleanup Pending Registrations
-        $('#wpr-cleanup-pending').on('click', function(e) {
-            e.preventDefault();
-            
-            if (!confirm('Are you sure you want to delete all pending registrations older than the specified hours? This action cannot be undone.')) {
+            if (!confirm('Are you sure you want to run cleanup now? This will delete all pending registrations older than the specified hours.')) {
                 return;
             }
             
-            var $button = $(this);
-            var originalText = $button.text();
-            
-            $button.addClass('wpr-loading').text(wprAdmin.strings.cleaning);
+            $button.addClass('wpr-loading').prop('disabled', true);
+            $result.html('');
             
             $.ajax({
                 url: wprAdmin.ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'wpr_cleanup_pending_users',
+                    action: 'wpr_manual_cleanup',
                     nonce: wprAdmin.nonce
                 },
                 success: function(response) {
                     if (response.success) {
-                        showNotice('success', wprAdmin.strings.cleaned);
-                        
-                        // Remove pending registration notice if visible
-                        $('.wpr-notice[data-notice="pending_registrations"]').fadeOut();
+                        $result.html('<span class="wpr-message wpr-message-success">' + response.data.message + '</span>');
                     } else {
-                        $button.removeClass('wpr-loading').text(originalText);
-                        showNotice('error', wprAdmin.strings.error + ' ' + (response.data.message || 'Unknown error'));
+                        $result.html('<span class="wpr-message wpr-message-error">' + (response.data.message || 'Error running cleanup') + '</span>');
                     }
                 },
                 error: function() {
-                    $button.removeClass('wpr-loading').text(originalText);
-                    showNotice('error', wprAdmin.strings.error + ' Failed to cleanup');
+                    $result.html('<span class="wpr-message wpr-message-error">An error occurred. Please try again.</span>');
+                },
+                complete: function() {
+                    $button.removeClass('wpr-loading').prop('disabled', false);
+                    
+                    // Clear message after 5 seconds
+                    setTimeout(function() {
+                        $result.html('');
+                    }, 5000);
                 }
             });
         });
         
-        // Dismiss Notices
-        $('.wpr-notice.is-dismissible').on('click', '.notice-dismiss', function() {
-            var $notice = $(this).closest('.wpr-notice');
-            var noticeType = $notice.data('notice');
+        // Handle product selection change
+        $('#wpr_membership_product_id').on('change', function() {
+            var productId = $(this).val();
+            var $productInfo = $('#wprProductInfo');
             
-            if (noticeType) {
-                $.ajax({
-                    url: wprAdmin.ajaxUrl,
-                    type: 'POST',
-                    data: {
-                        action: 'wpr_dismiss_notice',
-                        nonce: wprAdmin.nonce,
-                        notice: noticeType
+            if (productId === '0' || productId === '') {
+                // No product selected
+                $productInfo.removeClass('wpr-product-selected').addClass('wpr-product-warning');
+                $productInfo.html(`
+                    <p><strong>⚠️ ${wprAdmin.strings.noProductSelected}</strong></p>
+                    <p>${wprAdmin.strings.selectProduct}</p>
+                    <a href="${wpApiSettings ? wpApiSettings.root.replace('/wp-json/', '/post-new.php?post_type=product') : '#'}" class="wpr-button wpr-button-primary" target="_blank">
+                        Create New Product →
+                    </a>
+                `);
+                return;
+            }
+            
+            // Fetch product info via AJAX
+            $.ajax({
+                url: wprAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'wpr_get_product_info',
+                    nonce: wprAdmin.nonce,
+                    product_id: productId
+                },
+                success: function(response) {
+                    if (response.success) {
+                        var product = response.data;
+                        $productInfo.removeClass('wpr-product-warning').addClass('wpr-product-selected');
+                        $productInfo.html(`
+                            <div class="wpr-product-details">
+                                <strong>${wprAdmin.strings.productSelected}:</strong>
+                                <span>${product.name}</span>
+                                <span class="wpr-product-price">${product.price}</span>
+                            </div>
+                            <a href="${product.editUrl}" class="wpr-button wpr-button-secondary" target="_blank">
+                                ${wprAdmin.strings.editProduct} ↗
+                            </a>
+                        `);
                     }
-                });
+                }
+            });
+        });
+        
+        // Add confirmation to settings form submit
+        $('form[action="options.php"]').on('submit', function(e) {
+            var productId = $('#wpr_membership_product_id').val();
+            
+            if (productId === '0' || productId === '') {
+                if (!confirm('You have not selected a membership product. Are you sure you want to save these settings? The plugin will not work without a valid product.')) {
+                    e.preventDefault();
+                    return false;
+                }
             }
         });
         
-        // Price field validation
-        $('#wpr_membership_price').on('change', function() {
-            var price = parseFloat($(this).val());
+        // Highlight current section on scroll
+        $(window).on('scroll', function() {
+            var scrollPosition = $(window).scrollTop() + 100;
             
-            if (isNaN(price) || price < 0) {
-                $(this).val('10.00');
-                showNotice('error', 'Please enter a valid price greater than or equal to 0');
+            $('.wpr-card').each(function() {
+                var $section = $(this);
+                var sectionTop = $section.offset().top;
+                var sectionHeight = $section.outerHeight();
+                
+                if (scrollPosition >= sectionTop && scrollPosition < sectionTop + sectionHeight) {
+                    $section.css('border-color', '#667eea');
+                } else {
+                    $section.css('border-color', '#e2e8f0');
+                }
+            });
+        });
+        
+        // Add smooth scroll to anchor links
+        $('a[href^="#"]').on('click', function(e) {
+            var target = $(this.hash);
+            if (target.length) {
+                e.preventDefault();
+                $('html, body').animate({
+                    scrollTop: target.offset().top - 20
+                }, 500);
             }
         });
         
-        // Cleanup hours validation
-        $('#wpr_cleanup_hours').on('change', function() {
-            var hours = parseInt($(this).val());
-            
-            if (isNaN(hours) || hours < 1) {
-                $(this).val('24');
-                showNotice('error', 'Please enter a valid number of hours (minimum 1)');
-            } else if (hours > 168) {
-                $(this).val('168');
-                showNotice('error', 'Maximum cleanup hours is 168 (7 days)');
-            }
+        // Show/hide help text on focus
+        $('.wpr-select, .wpr-input').on('focus', function() {
+            $(this).next('.wpr-help-text').fadeIn(200);
+        }).on('blur', function() {
+            $(this).next('.wpr-help-text').fadeOut(200);
         });
         
-        // Toggle visibility based on settings
-        toggleFieldVisibility();
-        
-        $('#wpr_enable_free_registration').on('change', function() {
-            toggleFieldVisibility();
-        });
-        
-        function toggleFieldVisibility() {
-            var enableFree = $('#wpr_enable_free_registration').is(':checked');
-            var freeRolesRow = $('input[name="wpr_settings[wpr_free_roles][]"]').closest('tr');
-            
-            if (enableFree) {
-                freeRolesRow.show();
-            } else {
-                freeRolesRow.hide();
-            }
-        }
-        
-        // Helper function to show notices
-        function showNotice(type, message) {
-            var noticeClass = type === 'success' ? 'wpr-message success' : 'wpr-message error';
-            var $notice = $('<div class="' + noticeClass + '">' + message + '</div>');
-            
-            // Remove existing notices
-            $('.wpr-message').remove();
-            
-            // Insert at top of form
-            $('.wpr-settings-form').prepend($notice);
-            
-            // Fade out after 5 seconds
+        // Auto-dismiss success messages
+        $('.notice.is-dismissible').each(function() {
+            var $notice = $(this);
             setTimeout(function() {
-                $notice.fadeOut(function() {
+                $notice.fadeOut(300, function() {
                     $(this).remove();
                 });
-            }, 5000);
-        }
-        
-        // Auto-hide success messages
-        $('.updated, .notice-success').not('.is-dismissible').delay(5000).fadeOut();
-        
-        // Confirm before leaving with unsaved changes
-        var formChanged = false;
-        $('.wpr-settings-form input, .wpr-settings-form select, .wpr-settings-form textarea').on('change input', function() {
-            formChanged = true;
+            }, 10000);
         });
         
-        $('.wpr-settings-form').on('submit', function() {
-            formChanged = false;
-        });
-        
-        $(window).on('beforeunload', function() {
-            if (formChanged) {
-                return 'You have unsaved changes. Are you sure you want to leave?';
+        // Add keyboard navigation for cards
+        $('.wpr-card').attr('tabindex', '0').on('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                $(this).find('button, a').first().focus();
             }
         });
+        
+        // Initialize tooltips (if any)
+        $('[data-tooltip]').each(function() {
+            var $element = $(this);
+            var tooltipText = $element.attr('data-tooltip');
+            
+            $element.on('mouseenter', function() {
+                var $tooltip = $('<div class="wpr-tooltip">' + tooltipText + '</div>');
+                $tooltip.css({
+                    position: 'absolute',
+                    background: '#1e293b',
+                    color: '#fff',
+                    padding: '8px 12px',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                    zIndex: 1000
+                });
+                
+                $('body').append($tooltip);
+                
+                var offset = $element.offset();
+                $tooltip.css({
+                    top: offset.top - $tooltip.outerHeight() - 5,
+                    left: offset.left + ($element.outerWidth() / 2) - ($tooltip.outerWidth() / 2)
+                });
+            }).on('mouseleave', function() {
+                $('.wpr-tooltip').remove();
+            });
+        });
+        
     });
 
 })(jQuery);
