@@ -20,6 +20,21 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
+// Check if WooCommerce is active before loading
+if (!class_exists('WooCommerce')) {
+    add_action('admin_notices', function() {
+        ?>
+        <div class="notice notice-error">
+            <p>
+                <strong><?php _e('WooCommerce Paid Registration requires WooCommerce', 'woo-paid-registration'); ?></strong>
+                <?php _e('Please install and activate WooCommerce to use this plugin.', 'woo-paid-registration'); ?>
+            </p>
+        </div>
+        <?php
+    });
+    return;
+}
+
 // Define plugin constants
 define('WPR_VERSION', '1.0.0');
 define('WPR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -61,14 +76,14 @@ final class Woo_Paid_Registration {
         register_activation_hook(__FILE__, array($this, 'activate'));
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
         
-        add_action('plugins_loaded', array($this, 'init'));
+        add_action('plugins_loaded', array($this, 'init'), 20); // Priority 20 to ensure WooCommerce is loaded first
     }
     
     /**
      * Load plugin dependencies
      */
     private function load_dependencies() {
-        // Core classes
+        // Core classes - WooCommerce already checked at top of file
         require_once WPR_PLUGIN_DIR . 'includes/class-wpr-product-manager.php';
         require_once WPR_PLUGIN_DIR . 'includes/class-wpr-registration-handler.php';
         require_once WPR_PLUGIN_DIR . 'includes/class-wpr-payment-handler.php';
@@ -79,6 +94,8 @@ final class Woo_Paid_Registration {
             require_once WPR_PLUGIN_DIR . 'admin/class-wpr-admin-settings.php';
             require_once WPR_PLUGIN_DIR . 'admin/class-wpr-admin-notices.php';
         }
+        
+        return true;
     }
     
     /**
@@ -87,6 +104,11 @@ final class Woo_Paid_Registration {
     public function init() {
         // Load text domain
         load_plugin_textdomain('woo-paid-registration', false, dirname(WPR_PLUGIN_BASENAME) . '/languages');
+        
+        // Check if WooCommerce is properly loaded
+        if (!class_exists('WooCommerce')) {
+            return;
+        }
         
         // Initialize components
         WPR_Product_Manager::get_instance();
@@ -106,6 +128,16 @@ final class Woo_Paid_Registration {
      * Activation hook
      */
     public function activate() {
+        // Check if WooCommerce is active
+        if (!class_exists('WooCommerce')) {
+            deactivate_plugins(plugin_basename(__FILE__));
+            wp_die(
+                __('This plugin requires WooCommerce to be installed and active.', 'woo-paid-registration'),
+                __('Plugin Activation Error', 'woo-paid-registration'),
+                array('back_link' => true)
+            );
+        }
+        
         // Create default settings
         $default_settings = array(
             'wpr_enabled' => 'yes',
@@ -114,6 +146,7 @@ final class Woo_Paid_Registration {
             'wpr_redirect_after_payment' => '',
             'wpr_enable_free_registration' => 'no',
             'wpr_free_roles' => array(),
+            'wpr_cleanup_hours' => 24,
         );
         
         if (!get_option('wpr_settings')) {
@@ -123,6 +156,11 @@ final class Woo_Paid_Registration {
         // Create the hidden membership product if it doesn't exist
         WPR_Product_Manager::get_instance()->create_membership_product();
         
+        // Schedule cleanup cron job
+        if (!wp_next_scheduled('wpr_cleanup_pending_registrations')) {
+            wp_schedule_event(time(), 'hourly', 'wpr_cleanup_pending_registrations');
+        }
+        
         // Flush rewrite rules
         flush_rewrite_rules();
     }
@@ -131,6 +169,9 @@ final class Woo_Paid_Registration {
      * Deactivation hook
      */
     public function deactivate() {
+        // Clear scheduled cron jobs
+        wp_clear_scheduled_hook('wpr_cleanup_pending_registrations');
+        
         flush_rewrite_rules();
     }
 }

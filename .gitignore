@@ -1,6 +1,12 @@
-```
+```gitignore
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+
 # Dependencies
 node_modules/
+vendor/
+composer.lock
 
 # Logs and temp files
 *.log
@@ -9,23 +15,16 @@ node_modules/
 # Environment
 .env
 .env.local
-.env.
+*.env.*
 
 # Editors
 .vscode/
 .idea/
 
 # WordPress specific
-wp-content/
+wp-content/cache/
 *.sql
-*.sql.gz
-
-# Backup files
-*~
-*.bak
-*.backup
-
-# OS generated files
-.DS_Store
-Thumbs.db
+*.zip
+*.tar
+*.gz
 ```
