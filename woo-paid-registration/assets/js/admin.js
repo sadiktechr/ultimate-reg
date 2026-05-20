@@ -7,41 +7,17 @@
 
     $(document).ready(function() {
         
-        // Create Membership Product
-        $('#wpr-create-product').on('click', function(e) {
-            e.preventDefault();
+        // Product selection change handler - show/hide product info box
+        $('.wpr-product-select').on('change', function() {
+            var selectedProductId = $(this).val();
             
-            var $button = $(this);
-            var originalText = $button.text();
-            
-            $button.addClass('wpr-loading').text(wprAdmin.strings.creating);
-            
-            $.ajax({
-                url: wprAdmin.ajaxUrl,
-                type: 'POST',
-                data: {
-                    action: 'wpr_create_membership_product',
-                    nonce: wprAdmin.nonce
-                },
-                success: function(response) {
-                    if (response.success) {
-                        // Show success message
-                        showNotice('success', wprAdmin.strings.created);
-                        
-                        // Reload page after short delay to show updated product info
-                        setTimeout(function() {
-                            location.reload();
-                        }, 1500);
-                    } else {
-                        $button.removeClass('wpr-loading').text(originalText);
-                        showNotice('error', wprAdmin.strings.error + ' ' + (response.data.message || 'Unknown error'));
-                    }
-                },
-                error: function() {
-                    $button.removeClass('wpr-loading').text(originalText);
-                    showNotice('error', wprAdmin.strings.error + ' Failed to create product');
-                }
-            });
+            if (selectedProductId) {
+                // User selected a product, form will save on submit
+                console.log('Product selected: ' + selectedProductId);
+            } else {
+                // No product selected
+                console.log('No product selected');
+            }
         });
         
         // Cleanup Pending Registrations

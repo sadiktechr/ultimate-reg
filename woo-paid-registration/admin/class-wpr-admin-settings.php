@@ -170,33 +170,55 @@ class WPR_Admin_Settings {
                             <table class="form-table">
                                 <tr>
                                     <th scope="row">
-                                        <label><?php _e('Product Status', 'woo-paid-registration'); ?></label>
+                                        <label for="wpr_product_id"><?php _e('Select Product', 'woo-paid-registration'); ?></label>
                                     </th>
                                     <td>
                                         <?php
                                         $product_id = isset($settings['wpr_product_id']) ? absint($settings['wpr_product_id']) : false;
                                         $product = $product_id ? wc_get_product($product_id) : false;
                                         
-                                        if ($product) {
-                                            echo '<p><strong>' . __('Product exists:', 'woo-paid-registration') . '</strong> #' . $product_id . ' - ' . $product->get_name() . '</p>';
-                                            echo '<p><strong>' . __('Price:', 'woo-paid-registration') . '</strong> ' . wc_price($product->get_price()) . '</p>';
-                                            echo '<a href="' . esc_url(admin_url('post.php?post=' . $product_id . '&action=edit')) . '" class="button">' . __('Edit Product', 'woo-paid-registration') . '</a>';
-                                        } else {
-                                            echo '<p class="description">' . __('No membership product found.', 'woo-paid-registration') . '</p>';
-                                            echo '<button type="button" class="button button-primary" id="wpr-create-product">' . __('Create Membership Product', 'woo-paid-registration') . '</button>';
-                                        }
+                                        // Get all products for dropdown
+                                        $all_products = wc_get_products(array(
+                                            'limit' => -1,
+                                            'status' => 'publish',
+                                            'orderby' => 'name',
+                                            'order' => 'ASC',
+                                        ));
                                         ?>
+                                        <select id="wpr_product_id" name="wpr_settings[wpr_product_id]" class="regular-text wpr-product-select">
+                                            <option value=""><?php _e('&mdash; Select a product &mdash;', 'woo-paid-registration'); ?></option>
+                                            <?php foreach ($all_products as $prod): ?>
+                                                <option value="<?php echo esc_attr($prod->get_id()); ?>" <?php selected($product_id, $prod->get_id()); ?>>
+                                                    #<?php echo esc_html($prod->get_id()); ?> - <?php echo esc_html($prod->get_name()); ?> (<?php echo wc_price($prod->get_price()); ?>)
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <p class="description"><?php _e('Select an existing product to use as the membership fee. You can create any product in WooCommerce and select it here.', 'woo-paid-registration'); ?></p>
+                                        
+                                        <?php if ($product): ?>
+                                            <div style="margin-top: 15px; padding: 15px; background: #f0f6fc; border-left: 4px solid #2271b1;">
+                                                <p><strong><?php _e('Selected Product:', 'woo-paid-registration'); ?></strong> #<?php echo $product_id; ?> - <?php echo esc_html($product->get_name()); ?></p>
+                                                <p><strong><?php _e('Current Price:', 'woo-paid-registration'); ?></strong> <?php echo wc_price($product->get_price()); ?></p>
+                                                <p><strong><?php _e('Status:', 'woo-paid-registration'); ?></strong> <?php echo ucfirst($product->get_status()); ?></p>
+                                                <a href="<?php echo esc_url(admin_url('post.php?post=' . $product_id . '&action=edit')); ?>" class="button" target="_blank"><?php _e('Edit Product ↗', 'woo-paid-registration'); ?></a>
+                                            </div>
+                                        <?php else: ?>
+                                            <div style="margin-top: 15px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107;">
+                                                <p><strong><?php _e('No product selected!', 'woo-paid-registration'); ?></strong></p>
+                                                <p class="description"><?php _e('Please select a product from the dropdown above to enable paid registration.', 'woo-paid-registration'); ?></p>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                                 <tr>
                                     <th scope="row">
-                                        <label for="wpr_membership_price"><?php _e('Default Price', 'woo-paid-registration'); ?></label>
+                                        <label for="wpr_membership_price"><?php _e('Suggested Price', 'woo-paid-registration'); ?></label>
                                     </th>
                                     <td>
                                         <input type="number" id="wpr_membership_price" name="wpr_settings[wpr_membership_price]" 
                                                value="<?php echo esc_attr(isset($settings['wpr_membership_price']) ? $settings['wpr_membership_price'] : '10.00'); ?>" 
                                                step="0.01" min="0" class="small-text" />
-                                        <p class="description"><?php _e('Default price for the membership product (can be edited in product)', 'woo-paid-registration'); ?></p>
+                                        <p class="description"><?php _e('This is just a reference. The actual price is set in the product you select above.', 'woo-paid-registration'); ?></p>
                                     </td>
                                 </tr>
                             </table>
@@ -358,28 +380,21 @@ class WPR_Admin_Settings {
     
     /**
      * AJAX handler to create membership product
+     * Note: Kept for backward compatibility, but feature is now deprecated
+     * Users should select existing products instead
      */
     public function ajax_create_membership_product() {
         check_ajax_referer('wpr_admin_nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_send_json_error(array('message' => __('Permission denied', 'woo-paid-registration')));
+            wp_send_json_error(array('message' => __('Permission denied. Please create a product manually in WooCommerce Products and select it from the dropdown.', 'woo-paid-registration')));
         }
         
-        $product_manager = WPR_Product_Manager::get_instance();
-        $product_id = $product_manager->create_membership_product();
-        
-        if ($product_id) {
-            $product = wc_get_product($product_id);
-            wp_send_json_success(array(
-                'product_id' => $product_id,
-                'product_name' => $product->get_name(),
-                'product_price' => wc_price($product->get_price()),
-                'edit_url' => admin_url('post.php?post=' . $product_id . '&action=edit'),
-            ));
-        } else {
-            wp_send_json_error(array('message' => __('Failed to create product', 'woo-paid-registration')));
-        }
+        // Return error directing user to create product manually
+        wp_send_json_error(array(
+            'message' => __('This feature has been updated. Please go to WooCommerce → Products → Add New to create your membership product, then select it from the dropdown above.', 'woo-paid-registration'),
+            'redirect_url' => admin_url('post-new.php?post_type=product')
+        ));
     }
     
     /**
