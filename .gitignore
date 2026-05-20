@@ -1,1 +1,32 @@
-Nothing to output - the modified file is a PHP source file and no build artifacts, dependencies, or temporary files were detected in the changes.
+```
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+dist/
+build/
+*.log
+*.tmp
+*.swp
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# WordPress specific
+wp-content/cache/
+*.log
+.DS_Store
+Thumbs.db
+```

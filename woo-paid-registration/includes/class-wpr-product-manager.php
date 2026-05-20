@@ -25,9 +25,10 @@ class WPR_Product_Manager {
     }
     
     private function init_hooks() {
-        add_filter('woocommerce_product_data_store_cpt_get_products_query', array($this, 'hide_membership_product'), 10, 2);
+        // Remove incompatible filters that cause WC compatibility warnings
+        // Only use safe, non-intrusive hooks
+        add_action('wp', array($this, 'exclude_membership_product_from_catalog'));
         add_filter('woocommerce_account_menu_items', array($this, 'remove_membership_from_orders'), 999);
-        add_action('pre_get_posts', array($this, 'exclude_membership_product_from_search'));
     }
     
     /**
@@ -80,17 +81,22 @@ class WPR_Product_Manager {
     /**
      * Hide membership product from shop and catalog
      */
-    public function hide_membership_product($query_args, $query_vars) {
-        if (!is_admin() && isset($query_vars['type']) && $query_vars['type'] !== 'wpr_membership') {
+    public function exclude_membership_product_from_catalog() {
+        if (!is_admin() && (is_shop() || is_product_category() || is_search())) {
             $membership_id = $this->get_membership_product_id();
             if ($membership_id) {
-                if (!isset($query_args['post__not_in'])) {
-                    $query_args['post__not_in'] = array();
+                // Remove from global query
+                global $wp_query;
+                if (isset($wp_query->posts)) {
+                    $wp_query->posts = array_filter($wp_query->posts, function($post) use ($membership_id) {
+                        return $post->ID != $membership_id;
+                    });
+                    if (isset($wp_query->post_count)) {
+                        $wp_query->post_count = count($wp_query->posts);
+                    }
                 }
-                $query_args['post__not_in'][] = $membership_id;
             }
         }
-        return $query_args;
     }
     
     /**
@@ -99,23 +105,6 @@ class WPR_Product_Manager {
     public function remove_membership_from_orders($items) {
         // Keep the orders menu item but we'll filter the actual orders elsewhere
         return $items;
-    }
-    
-    /**
-     * Exclude membership product from search results
-     */
-    public function exclude_membership_product_from_search($query) {
-        if (!is_admin() && $query->is_main_query()) {
-            if ($query->is_search() || $query->is_shop()) {
-                $membership_id = $this->get_membership_product_id();
-                if ($membership_id) {
-                    $query->set('post__not_in', array_merge(
-                        $query->get('post__not_in', array()),
-                        array($membership_id)
-                    ));
-                }
-            }
-        }
     }
     
     /**

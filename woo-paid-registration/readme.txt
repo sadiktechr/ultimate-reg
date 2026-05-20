@@ -1,6 +1,6 @@
 # WooCommerce Paid Registration
 
-**Version:** 1.0.0  
+**Version:** 2.0.0  
 **Requires at least:** WordPress 5.8, WooCommerce 5.0  
 **Tested up to:** WordPress 6.4, WooCommerce 8.0  
 **PHP Version:** 7.4 or higher  
@@ -8,22 +8,23 @@
 
 ## Description
 
-WooCommerce Paid Registration is a powerful plugin that transforms your WordPress registration system into a paid membership gateway. It requires users to complete payment for a hidden membership product before their registration is fully activated.
+WooCommerce Paid Registration is a powerful plugin that transforms your WordPress registration system into a paid membership gateway. It requires users to complete payment for a selected product before their registration is fully activated. Simply select any existing WooCommerce product as your membership fee!
 
 ## Features
 
 - **Paid Registration Flow**: Automatically redirects new registrations to checkout
-- **Hidden Membership Product**: Creates and manages a hidden product for membership fees
-- **Flexible Pricing**: Set custom membership prices through the admin panel
+- **Select Any Product**: Choose any existing WooCommerce product as the membership fee - no automatic product creation needed!
+- **Flexible Pricing**: Use any product with any price you set in WooCommerce
 - **Free Registration Options**: Allow specific user roles to register without payment
 - **Payment Protection**: Prevents removal of membership product during registration checkout
 - **User Status Management**: Track pending, active, failed, and cancelled registrations
 - **Auto Cleanup**: Automatically remove pending registrations after configurable time period
-- **Admin Dashboard**: Beautiful, user-friendly settings page with real-time actions
-- **Manual Activation**: Admin can manually activate/deactivate memberships
+- **Admin Dashboard**: Beautiful, user-friendly settings page with product dropdown selector
+- **Manual Activation**: Admin can manually activate/deactivate memberships from user profile
 - **Access Restriction**: Optionally restrict site access to paid members only
 - **Custom Redirects**: Set custom redirect URLs after successful payment
 - **WooCommerce Integration**: Seamlessly integrates with WooCommerce checkout and orders
+- **No Compatibility Issues**: Uses safe, non-intrusive hooks to avoid WooCommerce conflicts
 
 ## Installation
 
@@ -42,8 +43,22 @@ WooCommerce Paid Registration is a powerful plugin that transforms your WordPres
 
 ### Membership Product
 
-- **Product Status**: View and edit the automatically created membership product
-- **Default Price**: Set the default membership fee (editable in product)
+- **Select Product**: Choose any existing WooCommerce product from the dropdown to use as the membership fee
+- **Product Info**: View selected product details including name, price, and status
+- **Edit Product**: Quick link to edit the product in WooCommerce
+- **Suggested Price**: Reference field (actual price is set in the product itself)
+
+### How to Set Up Membership Product
+
+1. Go to **WooCommerce → Products → Add New**
+2. Create your membership product (e.g., "Membership Fee", "Registration Charge")
+3. Set the price, description, and any other product details
+4. Publish the product
+5. Go to **WooCommerce → Paid Registration**
+6. Select your newly created product from the "Select Product" dropdown
+7. Save settings
+
+That's it! The plugin will now require this product to be purchased during registration.
 
 ### Free Registration Options
 
@@ -68,94 +83,53 @@ WooCommerce Paid Registration is a powerful plugin that transforms your WordPres
 1. User fills out the registration form
 2. Upon submission, a user account is created with "pending_payment" status
 3. A pending order is automatically created for the membership product
-4. User is redirected to WooCommerce checkout
-5. User completes payment
-6. Upon successful payment, user status changes to "active"
-7. Welcome email is sent and user gains full access
+4. User is redirected to WooCommerce checkout to complete payment
+5. Once payment is completed, the user account is activated
+6. Welcome email is sent and user can access their account
 
-## Hooks and Filters
+If payment fails or is cancelled, the user remains in "pending_payment" status until they complete payment or the registration expires.
 
-### Actions
+## Frequently Asked Questions
 
-```php
-// Fired when membership product is created
-do_action('wpr_membership_product_created', $product_id);
+### Can I use any product as the membership fee?
 
-// Fired when membership price is updated
-do_action('wpr_membership_price_updated', $price, $product_id);
+Yes! You can select any existing WooCommerce product from the dropdown in the settings. This gives you complete flexibility to use simple products, variable products, or subscription products.
 
-// Fired when membership order is created
-do_action('wpr_membership_order_created', $order_id, $customer_id);
+### What happens if I change the product price?
 
-// Fired when registration is completed
-do_action('wpr_registration_completed', $user_id, $order_id);
+The price is managed entirely in WooCommerce. When you update the product price in WooCommerce, that new price will be used for all new registrations.
 
-// Fired when payment is completed
-do_action('wpr_membership_payment_completed', $user_id, $order_id, $order);
+### Can I offer free registration to some users?
 
-// Fired when payment fails
-do_action('wpr_membership_payment_failed', $user_id, $order_id, $order);
+Yes! You can enable free registration for specific user roles. For example, you might want administrators or editors to register without payment.
 
-// Fired when pending registration is cleaned up
-do_action('wpr_pending_registration_cleaned', $user_id);
-```
+### How do I manually activate a user?
 
-### Filters
+Go to Users → All Users, click on the user to edit their profile, and scroll down to the "Membership Status" section. You can manually activate or deactivate their membership.
 
-```php
-// Modify membership product price
-add_filter('wpr_membership_price', function($price) {
-    return '25.00';
-});
+### What happens to pending registrations?
 
-// Modify pending registration expiry hours
-add_filter('wpr_pending_registration_expiry', function($hours) {
-    return 48; // 48 hours instead of default 24
-});
+Pending registrations are automatically cleaned up after the specified number of hours (default: 24 hours). You can also manually trigger cleanup from the settings page.
 
-// Modify restricted capabilities for non-members
-add_filter('wpr_restricted_capabilities', function($caps) {
-    return array_merge($caps, array('edit_posts'));
-});
-```
+### Is the membership product hidden from the shop?
 
-## Scheduled Tasks
-
-The plugin schedules cleanup of pending registrations via WordPress cron:
-
-```php
-// Schedule cleanup (runs hourly)
-wp_schedule_event(time(), 'hourly', 'wpr_cleanup_pending_registrations');
-```
-
-## Troubleshooting
-
-### Membership product not created
-- Go to WooCommerce → Paid Registration
-- Click "Create Membership Product" button
-
-### Users stuck in pending status
-- Check if payment gateway is working correctly
-- Manually activate from Users → Edit User profile
-- Use the "Clean Pending Registrations" button
-
-### Checkout issues
-- Ensure WooCommerce is properly configured
-- Check that payment gateways are enabled
-- Verify the membership product is published
-
-## Support
-
-For support and feature requests, please contact us through our website.
+The product you select will remain visible in your shop unless you manually hide it. We recommend creating a dedicated "Membership Fee" product and setting it to hidden visibility if you don't want it appearing in your regular shop.
 
 ## Changelog
 
+### Version 2.0.0
+- **NEW**: Select any existing WooCommerce product instead of auto-creating one
+- **IMPROVED**: Removed incompatible WooCommerce hooks to prevent compatibility warnings
+- **IMPROVED**: Better product selection UI with dropdown and product info display
+- **FIXED**: WooCommerce compatibility issues with product query filters
+- **REMOVED**: Automatic membership product creation (use manual product selection instead)
+
 ### Version 1.0.0
 - Initial release
-- Complete paid registration system
-- Admin settings panel
-- User status management
-- Automatic cleanup system
+
+## Support
+
+For support, feature requests, or bug reports, please contact us at support@example.com or visit our website at https://example.com
 
 ## Credits
 
