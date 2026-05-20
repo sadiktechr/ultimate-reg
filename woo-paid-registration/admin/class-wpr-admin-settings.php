@@ -32,9 +32,6 @@ class WPR_Admin_Settings {
         // Register settings
         add_action('admin_init', array($this, 'register_settings'));
         
-        // Add settings tab to WooCommerce
-        add_filter('woocommerce_get_settings_pages', array($this, 'add_woocommerce_settings_tab'));
-        
         // Enqueue admin scripts and styles
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
         
@@ -102,9 +99,11 @@ class WPR_Admin_Settings {
     
     /**
      * Add WooCommerce settings tab
+     * Note: Removed as we're using a dedicated submenu page under WooCommerce
      */
     public function add_woocommerce_settings_tab($settings) {
-        $settings[] = new WPR_WooCommerce_Settings_Tab();
+        // Keeping this method empty to avoid fatal errors
+        // The plugin uses a dedicated submenu page instead
         return $settings;
     }
     
@@ -397,57 +396,5 @@ class WPR_Admin_Settings {
         $registration_handler->cleanup_pending_registrations();
         
         wp_send_json_success(array('message' => __('Cleanup completed successfully', 'woo-paid-registration')));
-    }
-}
-
-/**
- * WooCommerce Settings Tab Class
- */
-class WPR_WooCommerce_Settings_Tab extends WC_Settings_Page {
-    
-    public function __construct() {
-        $this->id = 'wpr';
-        $this->label = __('Paid Registration', 'woo-paid-registration');
-        
-        parent::__construct();
-    }
-    
-    public function get_settings() {
-        $settings = array(
-            array(
-                'title' => __('Paid Registration Settings', 'woo-paid-registration'),
-                'type' => 'title',
-                'desc' => __('Configure the paid registration system for WooCommerce', 'woo-paid-registration'),
-                'id' => 'wpr_options',
-            ),
-            
-            array(
-                'title' => __('Enable Paid Registration', 'woo-paid-registration'),
-                'desc' => __('Enable or disable the paid registration system', 'woo-paid-registration'),
-                'id' => 'wpr_enabled',
-                'default' => 'yes',
-                'type' => 'checkbox',
-            ),
-            
-            array(
-                'title' => __('Require Payment', 'woo-paid-registration'),
-                'desc' => __('Require payment to complete registration', 'woo-paid-registration'),
-                'id' => 'wpr_require_payment',
-                'default' => 'yes',
-                'type' => 'checkbox',
-            ),
-            
-            array(
-                'title' => __('Membership Price', 'woo-paid-registration'),
-                'desc' => __('Default price for the membership product', 'woo-paid-registration'),
-                'id' => 'wpr_membership_price',
-                'default' => '10.00',
-                'type' => 'price',
-            ),
-            
-            array('type' => 'sectionend', 'id' => 'wpr_options'),
-        );
-        
-        return apply_filters('woocommerce_get_settings_' . $this->id, $settings);
     }
 }
